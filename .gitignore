@@ -1,0 +1,8 @@
+.neon
+.env.local
+.env
+agenda.db
+agenda_backup_pre_migration_*.db
+build/
+dist/
+__pycache__/
