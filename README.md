@@ -148,6 +148,12 @@ Depois do deploy, testar:
 https://NOME-DO-SERVICO.onrender.com/health
 ```
 
+Pagina mobile simples para consultar marcacoes:
+
+```text
+https://NOME-DO-SERVICO.onrender.com/mobile
+```
+
 Na maquina Windows, atualizar `AGENDA_API_URL` no `.env.local` para o endereco
 do Render, por exemplo:
 

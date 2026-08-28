@@ -1,10 +1,13 @@
 import os
+from datetime import date, datetime, timedelta
 from decimal import Decimal
+from html import escape
 from pathlib import Path
 from typing import Any
 
 import psycopg
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import HTMLResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel
 
@@ -81,6 +84,9 @@ class SyncPayload(BaseModel):
 app = FastAPI(title="Agenda Clientes API")
 
 
+WEEK_DAYS = ("Segunda", "Terca", "Quarta", "Quinta", "Sexta", "Sabado", "Domingo")
+
+
 def load_env_file():
     env_file = Path(__file__).resolve().parent.parent / ".env.local"
     if not env_file.exists():
@@ -107,6 +113,19 @@ def check_api_key(x_api_key: str | None):
     expected_key = os.getenv("SYNC_API_KEY")
     if expected_key and x_api_key != expected_key:
         raise HTTPException(status_code=401, detail="Chave de sincronizacao invalida.")
+
+
+def week_start_for(day: date):
+    return day - timedelta(days=day.weekday())
+
+
+def parse_mobile_date(value: str | None):
+    if not value:
+        return week_start_for(date.today())
+    try:
+        return week_start_for(datetime.strptime(value, "%Y-%m-%d").date())
+    except ValueError:
+        return week_start_for(date.today())
 
 
 def clean_row(table, row):
@@ -167,6 +186,231 @@ def health():
         with conn.cursor() as cur:
             cur.execute("SELECT 1 AS ok")
             return cur.fetchone()
+
+
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return """
+    <!doctype html>
+    <html lang="pt">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta http-equiv="refresh" content="0; url=/mobile">
+        <title>Agenda</title>
+      </head>
+      <body>
+        <a href="/mobile">Abrir agenda mobile</a>
+      </body>
+    </html>
+    """
+
+
+@app.get("/mobile", response_class=HTMLResponse)
+def mobile(week: str | None = None):
+    start = parse_mobile_date(week)
+    end = start + timedelta(days=6)
+    previous_week = (start - timedelta(days=7)).isoformat()
+    next_week = (start + timedelta(days=7)).isoformat()
+
+    rows_by_day = {day.isoformat(): [] for day in (start + timedelta(days=index) for index in range(7))}
+    with psycopg.connect(database_url(), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT a.appointment_date, a.start_time, a.end_time, a.state,
+                       p.name AS provider_name,
+                       s.type || ' - ' || s.name AS service_name
+                FROM appointments a
+                JOIN providers p ON p.id = a.provider_id
+                JOIN services s ON s.id = a.service_id
+                WHERE a.appointment_date BETWEEN %s AND %s
+                ORDER BY a.appointment_date, a.start_time
+                """,
+                (start.isoformat(), end.isoformat()),
+            )
+            for row in cur.fetchall():
+                rows_by_day.setdefault(row["appointment_date"], []).append(row)
+
+    day_sections = []
+    for index, day_name in enumerate(WEEK_DAYS):
+        current_day = start + timedelta(days=index)
+        rows = rows_by_day.get(current_day.isoformat(), [])
+        if rows:
+            cards = "\n".join(
+                f"""
+                <article class="card state-{escape(row['state'].lower())}">
+                  <div class="time">{escape(row['start_time'])} - {escape(row['end_time'])}</div>
+                  <div class="service">{escape(row['service_name'])}</div>
+                  <div class="provider">{escape(row['provider_name'])}</div>
+                  <span class="badge">{escape(row['state'])}</span>
+                </article>
+                """
+                for row in rows
+            )
+        else:
+            cards = '<p class="empty">Sem marcacoes.</p>'
+        day_sections.append(
+            f"""
+            <section class="day">
+              <h2>{day_name} <span>{current_day:%d/%m/%Y}</span></h2>
+              {cards}
+            </section>
+            """
+        )
+
+    return f"""
+    <!doctype html>
+    <html lang="pt">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Agenda Mobile</title>
+        <style>
+          :root {{
+            color-scheme: light;
+            --bg: #f3f6fb;
+            --surface: #ffffff;
+            --text: #1f2937;
+            --muted: #64748b;
+            --primary: #0f766e;
+            --border: #d9e2ee;
+          }}
+          * {{ box-sizing: border-box; }}
+          body {{
+            margin: 0;
+            font-family: "Segoe UI", Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+          }}
+          header {{
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            padding: 16px;
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 2px 8px rgba(15, 23, 42, .18);
+          }}
+          h1 {{
+            margin: 0;
+            font-size: 22px;
+            font-weight: 700;
+          }}
+          .range {{
+            margin-top: 4px;
+            color: #d1fae5;
+            font-size: 14px;
+          }}
+          nav {{
+            display: flex;
+            gap: 8px;
+            padding: 12px 16px;
+            background: #e8f4f2;
+            border-bottom: 1px solid var(--border);
+          }}
+          nav a {{
+            flex: 1;
+            text-align: center;
+            padding: 10px 8px;
+            border-radius: 8px;
+            background: white;
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 700;
+            border: 1px solid #b7d9d4;
+          }}
+          main {{
+            padding: 12px;
+            max-width: 780px;
+            margin: 0 auto;
+          }}
+          .day {{
+            margin-bottom: 14px;
+          }}
+          h2 {{
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin: 10px 2px 8px;
+            font-size: 16px;
+          }}
+          h2 span {{
+            color: var(--muted);
+            font-size: 13px;
+            font-weight: 500;
+          }}
+          .card {{
+            position: relative;
+            margin-bottom: 8px;
+            padding: 12px 14px;
+            border: 1px solid var(--border);
+            border-left: 5px solid var(--primary);
+            border-radius: 8px;
+            background: var(--surface);
+            box-shadow: 0 1px 3px rgba(15, 23, 42, .08);
+          }}
+          .time {{
+            font-size: 14px;
+            color: var(--primary);
+            font-weight: 800;
+          }}
+          .service {{
+            margin-top: 4px;
+            padding-right: 92px;
+            font-size: 15px;
+            font-weight: 700;
+          }}
+          .provider {{
+            margin-top: 3px;
+            color: var(--muted);
+            font-size: 13px;
+          }}
+          .badge {{
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            padding: 4px 7px;
+            border-radius: 999px;
+            background: #ccfbf1;
+            color: #134e4a;
+            font-size: 11px;
+            font-weight: 800;
+          }}
+          .state-cancelado {{
+            border-left-color: #be123c;
+            background: #fff1f2;
+          }}
+          .state-concluido {{
+            border-left-color: #15803d;
+            background: #f0fdf4;
+          }}
+          .empty {{
+            margin: 0 0 8px;
+            padding: 12px 14px;
+            border: 1px dashed var(--border);
+            border-radius: 8px;
+            color: var(--muted);
+            background: rgba(255, 255, 255, .6);
+          }}
+        </style>
+      </head>
+      <body>
+        <header>
+          <h1>Agenda</h1>
+          <div class="range">Semana de {start:%d/%m/%Y} a {end:%d/%m/%Y}</div>
+        </header>
+        <nav>
+          <a href="/mobile?week={previous_week}">Semana anterior</a>
+          <a href="/mobile">Hoje</a>
+          <a href="/mobile?week={next_week}">Proxima semana</a>
+        </nav>
+        <main>
+          {''.join(day_sections)}
+        </main>
+      </body>
+    </html>
+    """
 
 
 @app.post("/sync/full")
