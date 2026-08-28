@@ -70,6 +70,22 @@ TABLE_COLUMNS = {
         "notes",
         "created_at",
     ),
+    "users": (
+        "id",
+        "username",
+        "password_hash",
+        "full_name",
+        "can_clients",
+        "can_providers",
+        "can_services",
+        "can_agenda",
+        "can_payments",
+        "can_backup",
+        "can_sync",
+        "can_users",
+        "active",
+        "created_at",
+    ),
 }
 
 COLUMN_DEFAULTS = {
@@ -87,6 +103,15 @@ COLUMN_DEFAULTS = {
     "period_start_date": "",
     "period_end_date": "",
     "amount": 0,
+    "full_name": "",
+    "can_clients": 0,
+    "can_providers": 0,
+    "can_services": 0,
+    "can_agenda": 0,
+    "can_payments": 0,
+    "can_backup": 0,
+    "can_sync": 0,
+    "can_users": 0,
 }
 
 

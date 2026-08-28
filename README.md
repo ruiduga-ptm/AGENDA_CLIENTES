@@ -141,6 +141,8 @@ No Render:
 4. Criar as variaveis de ambiente:
    - `DATABASE_URL`: usar o valor do Neon.
    - `SYNC_API_KEY`: criar uma chave/password propria para sincronizacao.
+   - `APP_SECRET`: criar uma chave longa para proteger o login mobile.
+   - `COOKIE_SECURE`: manter `1` em producao.
 
 Depois do deploy, testar:
 
@@ -148,11 +150,17 @@ Depois do deploy, testar:
 https://NOME-DO-SERVICO.onrender.com/health
 ```
 
-Pagina mobile simples para consultar marcacoes:
+Pagina mobile simples para consultar marcacoes, protegida por login:
 
 ```text
 https://NOME-DO-SERVICO.onrender.com/mobile
 ```
+
+O login mobile usa os mesmos utilizadores da aplicacao Windows. Depois de criar
+ou alterar utilizadores, carregar em `Sincronizar Neon` para atualizar tambem o
+acesso no telemovel. Na primeira instalacao existe o utilizador `admin` com
+password `admin`; deve ser alterado assim que possivel na janela
+`Utilizadores`.
 
 Na maquina Windows, atualizar `AGENDA_API_URL` no `.env.local` para o endereco
 do Render, por exemplo:

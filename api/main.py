@@ -1,4 +1,10 @@
+import base64
+import hashlib
+import hmac
+import json
 import os
+import secrets
+import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from html import escape
@@ -6,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
-from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel
 
@@ -70,15 +76,36 @@ TABLE_COLUMNS = {
         "notes",
         "created_at",
     ),
+    "users": (
+        "id",
+        "username",
+        "password_hash",
+        "full_name",
+        "can_clients",
+        "can_providers",
+        "can_services",
+        "can_agenda",
+        "can_payments",
+        "can_backup",
+        "can_sync",
+        "can_users",
+        "active",
+        "created_at",
+    ),
 }
 
-SYNC_ORDER = ("clients", "providers", "services", "appointments", "appointment_clients", "payments")
-SEQUENCE_TABLES = ("clients", "providers", "services", "appointments", "payments")
+SYNC_ORDER = ("clients", "providers", "services", "appointments", "appointment_clients", "payments", "users")
+SEQUENCE_TABLES = ("clients", "providers", "services", "appointments", "payments", "users")
 
 
 class SyncPayload(BaseModel):
     data: dict[str, list[dict[str, Any]]]
     replace_remote: bool = False
+
+
+class LoginPayload(BaseModel):
+    username: str
+    password: str
 
 
 app = FastAPI(title="Agenda Clientes API")
@@ -113,6 +140,61 @@ def check_api_key(x_api_key: str | None):
     expected_key = os.getenv("SYNC_API_KEY")
     if expected_key and x_api_key != expected_key:
         raise HTTPException(status_code=401, detail="Chave de sincronizacao invalida.")
+
+
+def session_secret():
+    return os.getenv("APP_SECRET") or os.getenv("SYNC_API_KEY") or "agenda-clientes-dev-secret"
+
+
+def cookie_secure():
+    return os.getenv("COOKIE_SECURE", "1") != "0"
+
+
+def verify_password(password, stored_hash):
+    if not stored_hash or "$" not in stored_hash:
+        return False
+    salt, expected_hash = stored_hash.split("$", 1)
+    calculated_hash = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        200000,
+    ).hex()
+    return secrets.compare_digest(calculated_hash, expected_hash)
+
+
+def sign_value(value):
+    return hmac.new(session_secret().encode("utf-8"), value.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def create_session_token(user):
+    payload = {
+        "user_id": user["id"],
+        "username": user["username"],
+        "full_name": user["full_name"] or user["username"],
+        "exp": int(time.time()) + 86400,
+    }
+    raw = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8")).decode("ascii")
+    return f"{raw}.{sign_value(raw)}"
+
+
+def read_session_token(token):
+    if not token or "." not in token:
+        return None
+    raw, signature = token.rsplit(".", 1)
+    if not secrets.compare_digest(signature, sign_value(raw)):
+        return None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(raw.encode("ascii")).decode("utf-8"))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if payload.get("exp", 0) < int(time.time()):
+        return None
+    return payload
+
+
+def current_mobile_user(request: Request):
+    return read_session_token(request.cookies.get("agenda_session"))
 
 
 def week_start_for(day: date):
@@ -206,8 +288,176 @@ def home():
     """
 
 
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, next: str = "/mobile"):
+    if current_mobile_user(request):
+        return RedirectResponse(next or "/mobile", status_code=303)
+    safe_next = next if next.startswith("/") else "/mobile"
+    return f"""
+    <!doctype html>
+    <html lang="pt">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Login - Agenda</title>
+        <style>
+          :root {{
+            color-scheme: light;
+            --bg: #f3f6fb;
+            --surface: #ffffff;
+            --text: #1f2937;
+            --muted: #64748b;
+            --primary: #0f766e;
+            --danger: #be123c;
+            --border: #d9e2ee;
+          }}
+          * {{ box-sizing: border-box; }}
+          body {{
+            min-height: 100vh;
+            margin: 0;
+            display: grid;
+            place-items: center;
+            padding: 18px;
+            font-family: "Segoe UI", Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+          }}
+          main {{
+            width: min(420px, 100%);
+            padding: 24px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--surface);
+            box-shadow: 0 8px 28px rgba(15, 23, 42, .12);
+          }}
+          h1 {{
+            margin: 0 0 6px;
+            font-size: 24px;
+          }}
+          p {{
+            margin: 0 0 20px;
+            color: var(--muted);
+          }}
+          label {{
+            display: block;
+            margin: 14px 0 6px;
+            font-weight: 700;
+          }}
+          input {{
+            width: 100%;
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font: inherit;
+          }}
+          button {{
+            width: 100%;
+            margin-top: 18px;
+            padding: 12px;
+            border: 0;
+            border-radius: 8px;
+            background: var(--primary);
+            color: white;
+            font: inherit;
+            font-weight: 800;
+            cursor: pointer;
+          }}
+          .error {{
+            display: none;
+            margin-top: 12px;
+            color: var(--danger);
+            font-weight: 700;
+          }}
+        </style>
+      </head>
+      <body>
+        <main>
+          <h1>Agenda</h1>
+          <p>Entrar para consultar as marcacoes.</p>
+          <form id="login-form">
+            <label for="username">Utilizador</label>
+            <input id="username" name="username" autocomplete="username" required autofocus>
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required>
+            <button type="submit">Entrar</button>
+            <div id="error" class="error">Utilizador ou password invalido.</div>
+          </form>
+        </main>
+        <script>
+          const form = document.getElementById("login-form");
+          const error = document.getElementById("error");
+          form.addEventListener("submit", async (event) => {{
+            event.preventDefault();
+            error.style.display = "none";
+            const response = await fetch("/login", {{
+              method: "POST",
+              headers: {{ "Content-Type": "application/json" }},
+              body: JSON.stringify({{
+                username: form.username.value,
+                password: form.password.value
+              }})
+            }});
+            if (response.ok) {{
+              window.location.href = {json.dumps(safe_next)};
+              return;
+            }}
+            error.style.display = "block";
+          }});
+        </script>
+      </body>
+    </html>
+    """
+
+
+@app.post("/login")
+def login(payload: LoginPayload, response: Response):
+    username = payload.username.strip()
+    if not username or not payload.password:
+        raise HTTPException(status_code=401, detail="Utilizador ou password invalido.")
+
+    with psycopg.connect(database_url(), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, username, password_hash, full_name
+                FROM users
+                WHERE username = %s
+                  AND active = 1
+                """,
+                (username,),
+            )
+            user = cur.fetchone()
+
+    if not user or not verify_password(payload.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Utilizador ou password invalido.")
+
+    response.set_cookie(
+        "agenda_session",
+        create_session_token(user),
+        max_age=86400,
+        httponly=True,
+        secure=cookie_secure(),
+        samesite="lax",
+    )
+    return {"status": "ok"}
+
+
+@app.get("/logout")
+def logout(response: Response):
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie("agenda_session")
+    return response
+
+
 @app.get("/mobile", response_class=HTMLResponse)
-def mobile(week: str | None = None):
+def mobile(request: Request, week: str | None = None):
+    user = current_mobile_user(request)
+    if not user:
+        next_url = "/mobile"
+        if week:
+            next_url += f"?week={week}"
+        return RedirectResponse(f"/login?next={next_url}", status_code=303)
+
     start = parse_mobile_date(week)
     end = start + timedelta(days=6)
     previous_week = (start - timedelta(days=7)).isoformat()
@@ -296,6 +546,20 @@ def mobile(week: str | None = None):
             margin: 0;
             font-size: 22px;
             font-weight: 700;
+          }}
+          .topline {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+          }}
+          .logout {{
+            flex: 0 0 auto;
+            color: white;
+            font-size: 13px;
+            font-weight: 800;
+            text-decoration: none;
+            opacity: .92;
           }}
           .range {{
             margin-top: 4px;
@@ -397,7 +661,11 @@ def mobile(week: str | None = None):
       </head>
       <body>
         <header>
-          <h1>Agenda</h1>
+          <div class="topline">
+            <h1>Agenda</h1>
+            <a class="logout" href="/logout">Sair</a>
+          </div>
+          <div class="range">Sessao: {escape(user.get("full_name") or user.get("username") or "")}</div>
           <div class="range">Semana de {start:%d/%m/%Y} a {end:%d/%m/%Y}</div>
         </header>
         <nav>
@@ -432,6 +700,7 @@ def sync_full(payload: SyncPayload, x_api_key: str | None = Header(default=None)
                             appointment_clients,
                             payments,
                             appointments,
+                            users,
                             clients,
                             providers,
                             services

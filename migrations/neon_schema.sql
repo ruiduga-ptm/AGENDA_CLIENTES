@@ -96,8 +96,26 @@ CREATE TABLE IF NOT EXISTS payments (
     FOREIGN KEY (service_id) REFERENCES services(id)
 );
 
+CREATE TABLE IF NOT EXISTS users (
+    id BIGSERIAL PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    full_name TEXT NOT NULL DEFAULT '',
+    can_clients INTEGER NOT NULL DEFAULT 0,
+    can_providers INTEGER NOT NULL DEFAULT 0,
+    can_services INTEGER NOT NULL DEFAULT 0,
+    can_agenda INTEGER NOT NULL DEFAULT 0,
+    can_payments INTEGER NOT NULL DEFAULT 0,
+    can_backup INTEGER NOT NULL DEFAULT 0,
+    can_sync INTEGER NOT NULL DEFAULT 0,
+    can_users INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_clients_name ON clients (name);
 CREATE INDEX IF NOT EXISTS idx_providers_name ON providers (name);
 CREATE INDEX IF NOT EXISTS idx_services_type_name ON services (type, name);
 CREATE INDEX IF NOT EXISTS idx_appointments_date_provider ON appointments (appointment_date, provider_id);
 CREATE INDEX IF NOT EXISTS idx_payments_client_service ON payments (client_id, service_id);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);

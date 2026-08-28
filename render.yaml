@@ -9,3 +9,7 @@ services:
         sync: false
       - key: SYNC_API_KEY
         sync: false
+      - key: APP_SECRET
+        sync: false
+      - key: COOKIE_SECURE
+        value: "1"
